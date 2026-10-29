@@ -57,6 +57,10 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 /* 「申請する」の前のアイコン */
 .form-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .form-head h2 { margin: 0; }
+/* 「費用申請」「申請する」を画像にしたとき。白い背景は背景の色になじませる */
+.title-img { display: block; object-fit: contain; mix-blend-mode: multiply; }
+.brand .title-img { height: 30px; max-width: 160px; }
+.form-head .title-img { height: 36px; max-width: 200px; }
 .form-head img { height: 48px; width: 48px; object-fit: contain; mix-blend-mode: multiply; }
 /* 設定：イラストの指定欄 */
 .illust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -248,6 +252,8 @@ const ILLUST_SLOTS = [
   ['year_normal', '年間の残額カードの背景', 'ふだん'], ['year_over', '年間の残額カードの背景', '使い切り・超過'],
 ];
 let illusts = {};
+// 前回覚えた画像を先に使う（ホーム以外の画面を直接開いたときも、いちばん上の文字の画像を出すため）
+try { illusts = (JSON.parse(localStorage.getItem('expense-illust') || 'null') || {}).images || {}; } catch (e) { /* なし */ }
 async function loadIllusts(version) {
   if (!version) { illusts = {}; return; }
   try {
@@ -305,6 +311,8 @@ function renderNav(path) {
   document.getElementById('topnav').innerHTML = items.map(([h, l]) => `<a href="${h}" class="${active(h) ? 'active' : ''}">${l}</a>`).join('');
   document.getElementById('tabbar').innerHTML = items.map(([h, l, p]) => `<a href="${h}" class="${active(h) ? 'active' : ''} ${p ? 'primary' : ''}">${l}</a>`).join('');
   document.getElementById('who').textContent = `${me.name}（${me.role === 'admin' ? '管理者' : '申請者'}）`;
+  // 「費用申請」の文字は、画像が設定されていれば画像に差し替える
+  document.getElementById('brand').innerHTML = illusts.title_logo ? `<img class="title-img" src="${illusts.title_logo}" alt="費用申請">` : '費用申請';
   document.getElementById('topbar').hidden = false;
   document.getElementById('tabbar').hidden = false;
 }

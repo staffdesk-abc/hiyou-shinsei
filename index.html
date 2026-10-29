@@ -43,19 +43,33 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .budget .label { color: var(--muted); font-size: .9rem; }
 .budget .remaining { font-size: 2.6rem; font-weight: 700; line-height: 1.2; margin: 4px 0 10px; font-variant-numeric: tabular-nums; }
 .budget .remaining small { font-size: 1rem; font-weight: 600; margin-left: 2px; }
-.budget.warning .remaining, .budget.exhausted .remaining { color: var(--warn); }
+.budget.warning .remaining, .budget.exhausted .remaining, .budget.over .remaining { color: var(--warn); }
 .budget.warning { border-color: #f1b9b2; background: var(--warn-soft); }
-.budget.exhausted { border-color: #e88f84; background: var(--warn-soft); }
+.budget.exhausted, .budget.over { border-color: #e88f84; background: var(--warn-soft); }
+/* 残額カードの背景のイラスト（右側に薄く）。文字はその上に出す */
+.budget { position: relative; overflow: hidden; }
+.budget > :not(.bg-illust) { position: relative; }
+.budget .bg-illust { position: absolute; right: -6px; top: 50%; transform: translateY(-50%); height: 88%; max-width: 48%; object-fit: contain; opacity: .18; pointer-events: none; }
+/* 「申請する」の見出しの横のイラスト */
+.form-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.form-head h2 { margin: 0; }
+.form-head img { height: 56px; max-width: 120px; object-fit: contain; }
+/* 設定：イラストの指定欄 */
+.illust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 640px) { .illust-grid { grid-template-columns: 1fr; } }
+.illust-slot { border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.illust-slot .thumb { height: 96px; display: flex; align-items: center; justify-content: center; background: #fafbfc; border-radius: 8px; margin: 8px 0; color: var(--muted); font-size: .85rem; }
+.illust-slot .thumb img { max-height: 96px; max-width: 100%; object-fit: contain; }
 .bar { height: 12px; background: #edf0f3; border-radius: 99px; overflow: hidden; display: flex; }
 .bar .used { background: var(--accent); }
 .bar .pending { background: repeating-linear-gradient(45deg, #8fb3c6, #8fb3c6 6px, #b5ced9 6px, #b5ced9 12px); }
 .budget.notice .bar .used { background: var(--notice); }
-.budget.warning .bar .used, .budget.exhausted .bar .used { background: var(--warn); }
+.budget.warning .bar .used, .budget.exhausted .bar .used, .budget.over .bar .used { background: var(--warn); }
 .budget .rows { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; font-size: .9rem; color: var(--muted); flex-wrap: wrap; }
 .budget .rows b { color: var(--text); font-variant-numeric: tabular-nums; }
 .alert { border-radius: 10px; padding: 10px 14px; margin: 12px 0 0; font-weight: 600; }
 .alert.notice { background: var(--notice-soft); color: var(--notice); }
-.alert.warning, .alert.exhausted { background: var(--warn); color: #fff; }
+.alert.warning, .alert.exhausted, .alert.over { background: var(--warn); color: #fff; }
 .list { list-style: none; margin: 0; padding: 0; }
 .list li { border-top: 1px solid var(--line); }
 .list li:first-child { border-top: none; }
@@ -95,7 +109,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .linkbtn { background: none; border: none; color: var(--muted); cursor: pointer; font: inherit; font-size: .85rem; padding: 4px; text-decoration: underline; }
 .submit-bar { margin-top: 8px; }
 @media (max-width: 640px) {
-  .submit-bar { position: fixed; left: 0; right: 0; bottom: calc(50px + env(safe-area-inset-bottom)); z-index: 15; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); padding: 10px 16px; }
+  .submit-bar.fixed { position: fixed; left: 0; right: 0; bottom: calc(50px + env(safe-area-inset-bottom)); z-index: 15; background: rgba(255,255,255,.96); border-top: 1px solid var(--line); padding: 10px 16px; }
   .form-pad { height: 90px; }
 }
 .flash { border-radius: 10px; padding: 10px 14px; margin: 12px 0; }
@@ -142,6 +156,8 @@ const ENDPOINT = LOCAL ? '/api' : API_URL;
 const MONTHLY_BUDGET = 25000;
 const ANNUAL_BUDGET = 300000;
 const MAX_IMAGE_CHARS = 1900000;
+// 申請画面の「商品名・イベント名」の選択肢（「その他」は名称を入力）
+const TITLE_CHOICES = ['ちいかわグッズ', 'ちいかわイベント', '外食', 'その他'];
 const STATUS_LABEL = { pending: '申請中', approved: '承認済み', rejected: '却下', cancelled: 'キャンセル' };
 
 // ---------- 合言葉 ----------
@@ -210,17 +226,45 @@ function alertFor(kind, used) {
   const t = kind === 'monthly' ? { notice: 20000, warning: 23000 } : { notice: 240000, warning: 276000 };
   const label = kind === 'monthly' ? '今月' : '今年度';
   const remaining = Math.max(0, budget - used);
+  if (used > budget) return { level: 'over', message: `${label}の予算を${yen(used - budget)}超えています` };
   if (used >= budget) return { level: 'exhausted', message: `${label}の予算を使い切りました` };
   if (used >= t.warning) return { level: 'warning', message: `${label}はあと${yen(remaining)}です` };
   if (used >= t.notice) return { level: 'notice', message: `${label}はあと${yen(remaining)}です` };
   return { level: 'none', message: '' };
 }
 
+/** 使い切り・超過のとき（イラストを「使い切り」の表情にする） */
+const used_up = (a) => a.level === 'exhausted' || a.level === 'over';
+
+// ---------- イラスト ----------
+// 管理者が「設定」で上げた画像。版（illustVersion）が変わったときだけ読み直し、端末に覚えておく
+const ILLUST_SLOTS = [
+  ['form_normal', '「申請する」の横', 'ふだん'], ['form_over', '「申請する」の横', '使い切り・超過'],
+  ['card_normal', '残額カードの背景（薄く表示）', 'ふだん'], ['card_over', '残額カードの背景（薄く表示）', '使い切り・超過'],
+];
+let illusts = {};
+async function loadIllusts(version) {
+  if (!version) { illusts = {}; return; }
+  try {
+    const c = JSON.parse(localStorage.getItem('expense-illust') || 'null');
+    if (c && c.version === version) { illusts = c.images; return; }
+  } catch (e) { /* 覚えていなければ読み直す */ }
+  try {
+    const r = await api('getIllustrations');
+    illusts = r.images;
+    try { localStorage.setItem('expense-illust', JSON.stringify(r)); } catch (e) { /* 入りきらなければ毎回読む */ }
+  } catch (e) {
+    illusts = {}; // イラストが読めなくてもアプリは使える
+  }
+}
+
 function budgetCard(kind, part, caption) {
   const a = alertFor(kind, part.used);
   const pct = (n) => Math.min(100, Math.max(0, (n / part.budget) * 100)) + '%';
   const name = kind === 'monthly' ? '今月' : '年間';
+  const bg = illusts[used_up(a) ? 'card_over' : 'card_normal'];
   return `<section class="card budget ${a.level}" aria-label="${name}の残額">
+    ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true">` : ''}
     <div class="label">${name}の残額<span class="small">　${esc(caption)}</span></div>
     <div class="remaining">${Math.max(0, part.remaining).toLocaleString('ja-JP')}<small>円</small></div>
     <div class="bar" role="img" aria-label="予算 ${yen(part.budget)}のうち ${yen(part.used)}を使用">
@@ -247,7 +291,8 @@ function list(items, empty) {
 let me = null;
 function renderNav(path) {
   if (!me) return;
-  const items = [['#/', 'ホーム'], ['#/new', '申請する', true], ['#/requests', '履歴']];
+  // 申請はホームのフォームから行うので、メニューは「ホーム」「履歴」（管理者は「設定」も）
+  const items = [['#/', 'ホーム'], ['#/requests', '履歴']];
   if (me.role === 'admin') items.push(['#/settings', '設定']);
   const active = (h) => (h === '#/' ? path === '/' : path.startsWith(h.slice(1)) || (h === '#/requests' && path.startsWith('/r/')));
   document.getElementById('topnav').innerHTML = items.map(([h, l]) => `<a href="${h}" class="${active(h) ? 'active' : ''}">${l}</a>`).join('');
@@ -262,27 +307,38 @@ let flash = '';
 
 async function pageHome() {
   const d = await api('getDashboard');
+  await loadIllusts(d.illustVersion);
   me = d.me;
   const s = d.summary;
   let html = `<h1>${monthLabel(s.month)}</h1>${flashHtml()}<div class="grid2">
     ${budgetCard('monthly', s.monthly, `毎月 ${yen(s.monthly.budget)}`)}
     ${budgetCard('annual', s.annual, fyShort(s.fiscalYear, s.fiscalStartMonth))}</div>
-    <div style="margin:16px 0"><a href="#/new" class="btn primary block">＋ 申請する</a></div>`;
-  if (me.role === 'admin') html += `<section class="card"><h2>承認待ち（${d.pending.length}件）</h2>${list(d.pending, '承認待ちの申請はありません')}</section>`;
-  else if (d.pending.length) html += `<section class="card"><h2>申請中（${d.pending.length}件）</h2>${list(d.pending)}</section>`;
+    ${requestForm(d, false)}`;
+  // 承認待ちは、管理者が承認する設定のとき（または残っているとき）だけ
+  if (me.role === 'admin' && (!d.autoApprove || d.pending.length)) html += `<section class="card"><h2>承認待ち（${d.pending.length}件）</h2>${list(d.pending, '承認待ちの申請はありません')}</section>`;
+  else if (me.role !== 'admin' && d.pending.length) html += `<section class="card"><h2>申請中（${d.pending.length}件）</h2>${list(d.pending)}</section>`;
   html += `<section class="card"><div class="section-head"><h2>最近の申請</h2><a href="#/requests" class="small">すべて見る</a></div>${list(d.recent)}</section>`;
   return html;
 }
 
 async function pageNew() {
   const d = await api('getDashboard');
+  await loadIllusts(d.illustVersion);
   me = d.me;
+  return `<h1>申請する</h1>${requestForm(d, true)}`;
+}
+
+/** 申請フォーム（ホームと「申請する」画面で共通）。fixedBar：スマホで送信ボタンを画面の下に固定する */
+function requestForm(d, fixedBar) {
   const s = d.summary;
   const available = Math.max(0, Math.min(s.monthly.remaining, s.annual.remaining));
   const id = newId(); // この画面で1回だけ作る。二重に送っても同じIDなので1件になる
   setTimeout(() => bindNewForm(id, available, s), 0);
-  return `<h1>申請する</h1><form class="card" id="f" novalidate>
-    <div class="field"><label for="title">商品名・イベント名<span class="req">必須</span></label><input id="title" type="text" maxlength="100" autocomplete="off"></div>
+  const side = illusts[available <= 0 ? 'form_over' : 'form_normal'];
+  return `<form class="card" id="f" novalidate>${fixedBar ? '' : `<div class="form-head"><h2>申請する</h2>${side ? `<img src="${side}" alt="" aria-hidden="true">` : ''}</div>`}
+    <div class="field"><label for="category">商品名・イベント名<span class="req">必須</span></label>
+      <select id="category"><option value="">選んでください</option>${TITLE_CHOICES.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
+      <input id="title" type="text" maxlength="100" autocomplete="off" placeholder="名称を入力" style="margin-top:8px" hidden></div>
     <div class="field"><label for="amount">金額（税込）<span class="req">必須</span></label>
       <div class="amount-input"><input id="amount" type="text" inputmode="numeric" placeholder="0" autocomplete="off"><span>円</span></div>
       <div class="hint" id="amountHint"></div></div>
@@ -292,8 +348,8 @@ async function pageNew() {
       <div id="imageBox"></div></div>
     <div id="err"></div>
     ${available <= 0 ? '<div class="flash error">残額がないため、申請できません</div>' : ''}
-    <div class="form-pad"></div>
-    <div class="submit-bar"><button type="submit" class="btn primary block" id="submit" disabled>申請する</button></div>
+    ${fixedBar ? '<div class="form-pad"></div>' : ''}
+    <div class="submit-bar ${fixedBar ? 'fixed' : ''}"><button type="submit" class="btn primary block" id="submit" disabled>申請する</button></div>
   </form>`;
 }
 
@@ -302,6 +358,12 @@ function bindNewForm(id, available, s) {
   if (!f) return;
   const el = (x) => document.getElementById(x);
   let image = '', imageBusy = false, busy = false;
+  // 「その他」のときだけ名称を入力する
+  const title = () => (el('category').value === 'その他' ? el('title').value.trim() : el('category').value);
+  el('category').addEventListener('change', () => {
+    el('title').hidden = el('category').value !== 'その他';
+    if (!el('title').hidden) el('title').focus();
+  });
   function update() {
     const amount = parseAmount(el('amount').value);
     const over = amount != null && amount > available;
@@ -309,7 +371,7 @@ function bindNewForm(id, available, s) {
     if (over) { hint.className = 'hint bad'; hint.textContent = `残額が足りません（申請できるのは ${yen(available)}まで）`; }
     else if (el('amount').value && amount == null) { hint.className = 'hint bad'; hint.textContent = '金額は数字で入力してください'; }
     else { hint.className = 'hint'; hint.textContent = `今月の残額 ${yen(Math.max(0, s.monthly.remaining))}・年間の残額 ${yen(Math.max(0, s.annual.remaining))}`; }
-    const can = !busy && !imageBusy && el('title').value.trim() !== '' && amount != null && amount > 0 && !over;
+    const can = !busy && !imageBusy && title() !== '' && amount != null && amount > 0 && !over;
     el('submit').disabled = !can;
     el('submit').textContent = busy ? '送信しています…' : amount ? `${yen(amount)}で申請する` : '申請する';
     return can ? amount : null;
@@ -337,9 +399,11 @@ function bindNewForm(id, available, s) {
     if (amount == null || busy) return;
     busy = true; update(); el('err').innerHTML = '';
     try {
-      const r = await api('createRequest', { id, title: el('title').value, amount, url: el('url').value, memo: el('memo').value, image });
-      flash = '申請しました。管理者の確認をお待ちください。';
-      location.hash = '#/r/' + r.id;
+      const r = await api('createRequest', { id, title: title(), amount, url: el('url').value, memo: el('memo').value, image });
+      flash = r.status === 'approved' ? `「${title()}」${yen(amount)}を申請し、承認されました。` : `「${title()}」${yen(amount)}を申請しました。管理者の確認をお待ちください。`;
+      // ホームから申請したときはホームのまま（残額がすぐ変わる）、「申請する」画面からはホームへ
+      if (location.hash === '#/' || location.hash === '') route();
+      else location.hash = '#/';
     } catch (err) {
       el('err').innerHTML = `<div class="flash error" role="alert">${esc(err.message)}</div>`;
       busy = false; update();
@@ -415,7 +479,6 @@ async function pageRequest(id) {
   me = d.me;
   const r = d.request;
   const isAdmin = me.role === 'admin';
-  const isOwner = r.applicant === me.name;
   if (r.hasImage) {
     api('getImage', id).then((src) => {
       const box = document.getElementById('imgBox');
@@ -439,7 +502,7 @@ async function pageRequest(id) {
       <div class="field"><label for="note">コメント<span class="opt">任意・変更履歴に残ります</span></label><input id="note" type="text" maxlength="500"></div>
       <label class="check"><input type="checkbox" id="allowOver"><span>予算を超える場合も確定する（通常はチェックしません）</span></label>
       <div id="actErr"></div><div class="btns" id="actBtns"></div></section>`;
-  } else if (!isAdmin && isOwner && r.status === 'pending') {
+  } else if (d.canCancel) {
     actions = `<section class="card"><button class="btn danger block" id="selfCancel">申請をキャンセルする</button><div id="actErr"></div></section>`;
   }
   return `<p class="small"><a href="#/requests">← 履歴へ</a></p>${flashHtml()}
@@ -497,6 +560,7 @@ function bindActions(r) {
 
 async function pageSettings() {
   const d = await api('getDashboard');
+  await loadIllusts(d.illustVersion);
   me = d.me;
   if (me.role !== 'admin') { location.hash = '#/'; return ''; }
   const s = d.summary;
@@ -511,8 +575,29 @@ async function pageSettings() {
       try { await api('setFiscalStartMonth', Number(sel.value)); flash = '保存しました'; route(); }
       catch (err) { document.getElementById('setErr').innerHTML = `<div class="flash error">${esc(err.message)}</div>`; btn.disabled = false; }
     };
+    bindIllustSettings();
+    const auto = document.getElementById('autoApprove');
+    auto.onchange = async () => {
+      const on = auto.checked;
+      if (!confirm(on ? '申請を自動で承認するようにしますか？' : '管理者が承認するようにしますか？（申請は「申請中」になります）')) { auto.checked = !on; return; }
+      auto.disabled = true;
+      try { await api('setAutoApprove', on); flash = '保存しました'; route(); }
+      catch (err) { document.getElementById('autoErr').innerHTML = `<div class="flash error">${esc(err.message)}</div>`; auto.checked = !on; auto.disabled = false; }
+    };
   }, 0);
-  return `<h1>設定</h1>${flashHtml()}<section class="card"><h2>年度の開始月</h2>
+  return `<h1>設定</h1>${flashHtml()}<section class="card"><h2>イラスト</h2>
+    <p class="small muted">「使い切り・超過」は、今月（年間のカードは年間）の予算を使い切ったときに切り替わります。透明の背景の PNG がおすすめです。</p>
+    <div class="illust-grid">${ILLUST_SLOTS.map(([slot, place, mood]) => `<div class="illust-slot">
+      <div><b>${esc(place)}</b><span class="small muted">　${esc(mood)}</span></div>
+      <div class="thumb" id="thumb-${slot}">${illusts[slot] ? `<img src="${illusts[slot]}" alt="">` : 'まだありません'}</div>
+      <div class="btns"><label class="btn">選ぶ<input type="file" accept="image/*" data-slot="${slot}" hidden></label>
+      ${illusts[slot] ? `<button type="button" class="btn danger" data-remove="${slot}">外す</button>` : ''}</div></div>`).join('')}</div>
+    <div id="illustErr"></div></section>
+    <section class="card"><h2>承認のしかた</h2>
+    <label class="check" style="font-size:1rem"><input type="checkbox" id="autoApprove" ${d.autoApprove ? 'checked' : ''}><span>申請を自動で承認する</span></label>
+    <p class="small muted">オンのときは、残額の範囲内の申請がそのまま承認済みになります。あとから管理者が金額の訂正・キャンセルをできます。申請者も、自動で承認された自分の申請は取り消せます。</p>
+    <div id="autoErr"></div></section>
+    <section class="card"><h2>年度の開始月</h2>
     <p class="small muted">今年度：${fyLabel(s.fiscalYear, s.fiscalStartMonth)}</p>
     <div class="btns" style="align-items:center"><select id="fsm" aria-label="年度の開始月" style="flex:1">
       ${Array.from({ length: 12 }, (_, i) => i + 1).map((m) => `<option value="${m}" ${m === s.fiscalStartMonth ? 'selected' : ''}>${m}月</option>`).join('')}
@@ -521,6 +606,54 @@ async function pageSettings() {
     <section class="card"><h2>予算</h2><dl class="dl">
       <dt>月間予算</dt><dd>${yen(MONTHLY_BUDGET)}（毎月1日 0時にリセット・繰り越しなし）</dd>
       <dt>年間予算</dt><dd>${yen(ANNUAL_BUDGET)}（年度の初めにリセット）</dd></dl></section>`;
+}
+
+function bindIllustSettings() {
+  const err = (m) => (document.getElementById('illustErr').innerHTML = m ? `<div class="flash error">${esc(m)}</div>` : '');
+  async function save(slot, dataUrl) {
+    err('');
+    try { await api('setIllustration', slot, dataUrl); flash = '保存しました'; route(); }
+    catch (e) { err(e.message); }
+  }
+  document.querySelectorAll('input[data-slot]').forEach((input) => {
+    input.onchange = async () => {
+      const file = input.files[0];
+      if (!file) return;
+      document.getElementById('thumb-' + input.dataset.slot).textContent = '準備しています…';
+      try { await save(input.dataset.slot, await prepareIllust(file)); }
+      catch (e) { err('この画像は使えませんでした。別の画像を選んでください'); route(); }
+    };
+  });
+  document.querySelectorAll('button[data-remove]').forEach((b) => {
+    b.onclick = () => { if (confirm('このイラストを外しますか？')) save(b.dataset.remove, ''); };
+  });
+}
+
+/** イラストの画像。小さければそのまま（GIF の動きや透明もそのまま）、大きければ透明を残して縮める */
+async function prepareIllust(file) {
+  const asIs = await new Promise((ok, ng) => {
+    const r = new FileReader();
+    r.onload = () => ok(String(r.result));
+    r.onerror = ng;
+    r.readAsDataURL(file);
+  });
+  if (/^data:image\/(png|jpeg|webp|gif);base64,/.test(asIs) && asIs.length <= 700000) return asIs;
+  const bitmap = await createImageBitmap(file);
+  try {
+    for (const max of [800, 600, 400]) {
+      const scale = Math.min(1, max / Math.max(bitmap.width, bitmap.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(bitmap.width * scale);
+      c.height = Math.round(bitmap.height * scale);
+      c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
+      let url = c.toDataURL('image/webp', 0.9);
+      if (!url.startsWith('data:image/webp')) url = c.toDataURL('image/png');
+      if (url.length <= 700000) return url;
+    }
+  } finally {
+    if (bitmap.close) bitmap.close();
+  }
+  throw new Error('too large');
 }
 
 function flashHtml() {

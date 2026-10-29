@@ -10,7 +10,7 @@
 <style>
 :root {
   --bg: #fde9e4; --card: #ffffff; --text: #1f2933; --muted: #6b7682; --line: #e4e7eb;
-  --accent: #2f6f8f; --accent-soft: #e8f1f5; --ok: #2f7d55; --ok-soft: #e7f4ec;
+  --accent: #c24e68; --accent-soft: #fbe4e9; --ok: #2f7d55; --ok-soft: #e7f4ec;
   --notice: #9a6b00; --notice-soft: #fdf5e1; --warn: #c0392b; --warn-soft: #fdecea; --radius: 14px;
 }
 * { box-sizing: border-box; }
@@ -66,7 +66,7 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .illust-slot .thumb img { max-height: 96px; max-width: 100%; object-fit: contain; }
 .bar { height: 12px; background: #edf0f3; border-radius: 99px; overflow: hidden; display: flex; }
 .bar .used { background: var(--accent); }
-.bar .pending { background: repeating-linear-gradient(45deg, #8fb3c6, #8fb3c6 6px, #b5ced9 6px, #b5ced9 12px); }
+.bar .pending { background: repeating-linear-gradient(45deg, #e9a1b1, #e9a1b1 6px, #f4c9d2 6px, #f4c9d2 12px); }
 .budget.notice .bar .used { background: var(--notice); }
 .budget.warning .bar .used, .budget.exhausted .bar .used, .budget.over .bar .used { background: var(--warn); }
 .budget .rows { display: flex; justify-content: space-between; gap: 8px; margin-top: 10px; font-size: .9rem; color: var(--muted); flex-wrap: wrap; }
@@ -142,7 +142,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 <body>
 <header class="topbar" id="topbar" hidden>
   <div class="topbar-inner">
-    <a href="#/" class="brand">費用申請</a>
+    <a href="#/" class="brand" id="brand">費用申請</a>
     <nav class="topnav" id="topnav"></nav>
     <span class="spacer"></span>
     <span class="who" id="who"></span>
@@ -242,8 +242,10 @@ const used_up = (a) => a.level === 'exhausted' || a.level === 'over';
 // ---------- イラスト ----------
 // 管理者が「設定」で上げた画像。版（illustVersion）が変わったときだけ読み直し、端末に覚えておく
 const ILLUST_SLOTS = [
+  ['title_logo', '「費用申請」の文字（いちばん上）', ''], ['form_title', '「申請する」の文字', ''],
   ['form_normal', '「申請する」の前のアイコン', ''], ['form_bg', '申請フォームの背景', ''],
-  ['card_normal', '残額カードの背景', 'ふだん'], ['card_over', '残額カードの背景', '使い切り・超過'],
+  ['card_normal', '今月の残額カードの背景', 'ふだん'], ['card_over', '今月の残額カードの背景', '使い切り・超過'],
+  ['year_normal', '年間の残額カードの背景', 'ふだん'], ['year_over', '年間の残額カードの背景', '使い切り・超過'],
 ];
 let illusts = {};
 async function loadIllusts(version) {
@@ -265,7 +267,9 @@ function budgetCard(kind, part, caption) {
   const a = alertFor(kind, part.used, part.budget);
   const pct = (n) => Math.min(100, Math.max(0, (n / part.budget) * 100)) + '%';
   const name = kind === 'monthly' ? '今月' : '年間';
-  const bg = illusts[used_up(a) ? 'card_over' : 'card_normal'];
+  // 今月のカードと年間のカードは、別々の画像（card_…＝今月、year_…＝年間）
+  const prefix = kind === 'monthly' ? 'card' : 'year';
+  const bg = illusts[prefix + (used_up(a) ? '_over' : '_normal')];
   return `<section class="card budget ${a.level}" aria-label="${name}の残額">
     ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true" style="opacity:${display.cardOpacity / 100}">` : ''}
     <div class="label">${name}の残額<span class="small">　${esc(caption)}</span></div>
@@ -344,7 +348,7 @@ function requestForm(d, fixedBar) {
   const bg = illusts.form_bg;
   return `<form class="card form-card" id="f" novalidate>
     ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true" style="opacity:${display.formOpacity / 100}">` : ''}
-    ${fixedBar ? '' : `<div class="form-head">${icon ? `<img src="${icon}" alt="" aria-hidden="true">` : ''}<h2>申請する</h2></div>`}
+    ${fixedBar ? '' : `<div class="form-head">${icon ? `<img src="${icon}" alt="" aria-hidden="true">` : ''}<h2>${illusts.form_title ? `<img class="title-img" src="${illusts.form_title}" alt="申請する">` : '申請する'}</h2></div>`}
     <div class="field"><label for="category">商品名・イベント名<span class="req">必須</span></label>
       <select id="category"><option value="">選んでください</option>${TITLE_CHOICES.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
       <input id="title" type="text" maxlength="100" autocomplete="off" placeholder="名称を入力" style="margin-top:8px" hidden></div>
@@ -597,7 +601,7 @@ async function pageSettings() {
     };
   }, 0);
   return `<h1>設定</h1>${flashHtml()}<section class="card"><h2>イラスト</h2>
-    <p class="small muted">残額カードの「使い切り・超過」は、そのカードの予算を使い切ったときに切り替わります。アイコンと申請フォームの背景は、予算を使い切っても変わりません。</p>
+    <p class="small muted">今月・年間の残額カードは、それぞれ別の画像を指定できます。「使い切り・超過」は、そのカードの予算を使い切ったときに切り替わります。アイコンと申請フォームの背景は、予算を使い切っても変わりません。</p>
     <div class="illust-grid">${ILLUST_SLOTS.map(([slot, place, mood]) => `<div class="illust-slot">
       <div><b>${esc(place)}</b><span class="small muted">　${esc(mood)}</span></div>
       <div class="thumb" id="thumb-${slot}">${illusts[slot] ? `<img src="${illusts[slot]}" alt="">` : 'まだありません'}</div>
@@ -605,7 +609,7 @@ async function pageSettings() {
       ${illusts[slot] ? `<button type="button" class="btn danger" data-remove="${slot}">外す</button>` : ''}</div></div>`).join('')}</div>
     <div id="illustErr"></div>
     <h2 style="margin-top:20px">背景のイラストの濃さ</h2>
-    ${[['opCard', '残額カードの背景', display.cardOpacity, illusts.card_normal], ['opForm', '申請フォームの背景', display.formOpacity, illusts.form_bg]].map(([id, label, v, img]) => `
+    ${[['opCard', '残額カードの背景（今月・年間）', display.cardOpacity, illusts.card_normal || illusts.year_normal], ['opForm', '申請フォームの背景', display.formOpacity, illusts.form_bg]].map(([id, label, v, img]) => `
       <div class="field"><label for="${id}">${label}：<span id="${id}Val">${v}%</span></label>
         <div style="display:flex;gap:12px;align-items:center"><input id="${id}" type="range" min="0" max="100" step="5" value="${v}" style="flex:1">
         <div class="thumb" style="width:72px;height:56px;margin:0;background:#fff;border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">${img ? `<img id="${id}Prev" src="${img}" alt="" style="max-width:100%;max-height:100%;opacity:${v / 100}">` : `<span id="${id}Prev" class="small muted">なし</span>`}</div></div></div>`).join('')}

@@ -9,7 +9,7 @@
 <title>費用申請</title>
 <style>
 :root {
-  --bg: #f6f7f9; --card: #ffffff; --text: #1f2933; --muted: #6b7682; --line: #e4e7eb;
+  --bg: #fde9e4; --card: #ffffff; --text: #1f2933; --muted: #6b7682; --line: #e4e7eb;
   --accent: #2f6f8f; --accent-soft: #e8f1f5; --ok: #2f7d55; --ok-soft: #e7f4ec;
   --notice: #9a6b00; --notice-soft: #fdf5e1; --warn: #c0392b; --warn-soft: #fdecea; --radius: 14px;
 }
@@ -47,13 +47,17 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .budget.warning { border-color: #f1b9b2; background: var(--warn-soft); }
 .budget.exhausted, .budget.over { border-color: #e88f84; background: var(--warn-soft); }
 /* 残額カードの背景のイラスト（右側に薄く）。文字はその上に出す */
-.budget { position: relative; overflow: hidden; }
-.budget > :not(.bg-illust) { position: relative; }
-.budget .bg-illust { position: absolute; right: -6px; top: 50%; transform: translateY(-50%); height: 88%; max-width: 48%; object-fit: contain; opacity: .18; pointer-events: none; }
-/* 「申請する」の見出しの横のイラスト */
+.budget, .form-card { position: relative; overflow: hidden; }
+.budget > :not(.bg-illust), .form-card > :not(.bg-illust):not(.submit-bar) { position: relative; }
+/* 白い背景の画像（JPEG など）でも、白が背景の色になじむように乗算で重ねる */
+.bg-illust { position: absolute; pointer-events: none; mix-blend-mode: multiply; }
+.budget .bg-illust { right: -6px; top: 50%; transform: translateY(-50%); height: 88%; max-width: 48%; object-fit: contain; }
+/* 申請フォームの背景は、フォーム全体に広げる */
+.form-card .bg-illust { inset: 0; width: 100%; height: 100%; object-fit: cover; }
+/* 「申請する」の前のアイコン */
 .form-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .form-head h2 { margin: 0; }
-.form-head img { height: 56px; max-width: 120px; object-fit: contain; }
+.form-head img { height: 48px; width: 48px; object-fit: contain; mix-blend-mode: multiply; }
 /* 設定：イラストの指定欄 */
 .illust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 640px) { .illust-grid { grid-template-columns: 1fr; } }
@@ -153,8 +157,8 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 const API_URL = 'https://script.google.com/macros/s/AKfycbw1XOHvc7v6hKX7om3_9qJHoe2ZmDvWJtY_NtygJS-DhP8uLp76uAcrfbpD4_uy2AIM/exec';
 const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 const ENDPOINT = LOCAL ? '/api' : API_URL;
-const MONTHLY_BUDGET = 25000;
-const ANNUAL_BUDGET = 300000;
+/** 背景のイラストの濃さ（%）。管理者の設定（getDashboard の display）で上書きされる */
+let display = { cardOpacity: 30, formOpacity: 30 };
 const MAX_IMAGE_CHARS = 1900000;
 // 申請画面の「商品名・イベント名」の選択肢（「その他」は名称を入力）
 const TITLE_CHOICES = ['ちいかわグッズ', 'ちいかわイベント', '外食', 'その他'];
@@ -220,10 +224,9 @@ function parseAmount(s) {
 }
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2)).replace(/[^A-Za-z0-9]/g, '').slice(0, 32).padEnd(16, '0');
 
-// 残額の注意表示：月間は 20,000円・23,000円・25,000円、年間は同じ割合（80%・92%・100%）
-function alertFor(kind, used) {
-  const budget = kind === 'monthly' ? MONTHLY_BUDGET : ANNUAL_BUDGET;
-  const t = kind === 'monthly' ? { notice: 20000, warning: 23000 } : { notice: 240000, warning: 276000 };
+// 残額の注意表示：予算の 80%・92%・100%（月間 25,000円なら 20,000円・23,000円・25,000円）
+function alertFor(kind, used, budget) {
+  const t = { notice: Math.ceil(budget * 0.8), warning: Math.ceil(budget * 0.92) };
   const label = kind === 'monthly' ? '今月' : '今年度';
   const remaining = Math.max(0, budget - used);
   if (used > budget) return { level: 'over', message: `${label}の予算を${yen(used - budget)}超えています` };
@@ -239,8 +242,8 @@ const used_up = (a) => a.level === 'exhausted' || a.level === 'over';
 // ---------- イラスト ----------
 // 管理者が「設定」で上げた画像。版（illustVersion）が変わったときだけ読み直し、端末に覚えておく
 const ILLUST_SLOTS = [
-  ['form_normal', '「申請する」の横', 'ふだん'], ['form_over', '「申請する」の横', '使い切り・超過'],
-  ['card_normal', '残額カードの背景（薄く表示）', 'ふだん'], ['card_over', '残額カードの背景（薄く表示）', '使い切り・超過'],
+  ['form_normal', '「申請する」の前のアイコン', ''], ['form_bg', '申請フォームの背景', ''],
+  ['card_normal', '残額カードの背景', 'ふだん'], ['card_over', '残額カードの背景', '使い切り・超過'],
 ];
 let illusts = {};
 async function loadIllusts(version) {
@@ -259,12 +262,12 @@ async function loadIllusts(version) {
 }
 
 function budgetCard(kind, part, caption) {
-  const a = alertFor(kind, part.used);
+  const a = alertFor(kind, part.used, part.budget);
   const pct = (n) => Math.min(100, Math.max(0, (n / part.budget) * 100)) + '%';
   const name = kind === 'monthly' ? '今月' : '年間';
   const bg = illusts[used_up(a) ? 'card_over' : 'card_normal'];
   return `<section class="card budget ${a.level}" aria-label="${name}の残額">
-    ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true">` : ''}
+    ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true" style="opacity:${display.cardOpacity / 100}">` : ''}
     <div class="label">${name}の残額<span class="small">　${esc(caption)}</span></div>
     <div class="remaining">${Math.max(0, part.remaining).toLocaleString('ja-JP')}<small>円</small></div>
     <div class="bar" role="img" aria-label="予算 ${yen(part.budget)}のうち ${yen(part.used)}を使用">
@@ -308,6 +311,7 @@ let flash = '';
 async function pageHome() {
   const d = await api('getDashboard');
   await loadIllusts(d.illustVersion);
+  if (d.display) display = d.display;
   me = d.me;
   const s = d.summary;
   let html = `<h1>${monthLabel(s.month)}</h1>${flashHtml()}<div class="grid2">
@@ -324,6 +328,7 @@ async function pageHome() {
 async function pageNew() {
   const d = await api('getDashboard');
   await loadIllusts(d.illustVersion);
+  if (d.display) display = d.display;
   me = d.me;
   return `<h1>申請する</h1>${requestForm(d, true)}`;
 }
@@ -334,8 +339,12 @@ function requestForm(d, fixedBar) {
   const available = Math.max(0, Math.min(s.monthly.remaining, s.annual.remaining));
   const id = newId(); // この画面で1回だけ作る。二重に送っても同じIDなので1件になる
   setTimeout(() => bindNewForm(id, available, s), 0);
-  const side = illusts[available <= 0 ? 'form_over' : 'form_normal'];
-  return `<form class="card" id="f" novalidate>${fixedBar ? '' : `<div class="form-head"><h2>申請する</h2>${side ? `<img src="${side}" alt="" aria-hidden="true">` : ''}</div>`}
+  // アイコンと背景は、予算を使い切っても変えない
+  const icon = illusts.form_normal;
+  const bg = illusts.form_bg;
+  return `<form class="card form-card" id="f" novalidate>
+    ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true" style="opacity:${display.formOpacity / 100}">` : ''}
+    ${fixedBar ? '' : `<div class="form-head">${icon ? `<img src="${icon}" alt="" aria-hidden="true">` : ''}<h2>申請する</h2></div>`}
     <div class="field"><label for="category">商品名・イベント名<span class="req">必須</span></label>
       <select id="category"><option value="">選んでください</option>${TITLE_CHOICES.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
       <input id="title" type="text" maxlength="100" autocomplete="off" placeholder="名称を入力" style="margin-top:8px" hidden></div>
@@ -500,7 +509,7 @@ async function pageRequest(id) {
       <div class="field"><label for="newAmount">金額（税込）${r.status === 'pending' ? '：変えて承認することもできます' : 'の訂正'}</label>
         <div class="amount-input"><input id="newAmount" type="text" inputmode="numeric" value="${r.amount}"><span>円</span></div></div>
       <div class="field"><label for="note">コメント<span class="opt">任意・変更履歴に残ります</span></label><input id="note" type="text" maxlength="500"></div>
-      <label class="check"><input type="checkbox" id="allowOver"><span>予算を超える場合も確定する（通常はチェックしません）</span></label>
+      <label class="check"><input type="checkbox" id="allowOver"><span>月間の予算を超える場合も確定する（通常はチェックしません・年間は超えられません）</span></label>
       <div id="actErr"></div><div class="btns" id="actBtns"></div></section>`;
   } else if (d.canCancel) {
     actions = `<section class="card"><button class="btn danger block" id="selfCancel">申請をキャンセルする</button><div id="actErr"></div></section>`;
@@ -561,6 +570,7 @@ function bindActions(r) {
 async function pageSettings() {
   const d = await api('getDashboard');
   await loadIllusts(d.illustVersion);
+  if (d.display) display = d.display;
   me = d.me;
   if (me.role !== 'admin') { location.hash = '#/'; return ''; }
   const s = d.summary;
@@ -576,6 +586,7 @@ async function pageSettings() {
       catch (err) { document.getElementById('setErr').innerHTML = `<div class="flash error">${esc(err.message)}</div>`; btn.disabled = false; }
     };
     bindIllustSettings();
+    bindBudgetAndDisplay();
     const auto = document.getElementById('autoApprove');
     auto.onchange = async () => {
       const on = auto.checked;
@@ -586,13 +597,19 @@ async function pageSettings() {
     };
   }, 0);
   return `<h1>設定</h1>${flashHtml()}<section class="card"><h2>イラスト</h2>
-    <p class="small muted">「使い切り・超過」は、今月（年間のカードは年間）の予算を使い切ったときに切り替わります。透明の背景の PNG がおすすめです。</p>
+    <p class="small muted">残額カードの「使い切り・超過」は、そのカードの予算を使い切ったときに切り替わります。アイコンと申請フォームの背景は、予算を使い切っても変わりません。</p>
     <div class="illust-grid">${ILLUST_SLOTS.map(([slot, place, mood]) => `<div class="illust-slot">
       <div><b>${esc(place)}</b><span class="small muted">　${esc(mood)}</span></div>
       <div class="thumb" id="thumb-${slot}">${illusts[slot] ? `<img src="${illusts[slot]}" alt="">` : 'まだありません'}</div>
       <div class="btns"><label class="btn">選ぶ<input type="file" accept="image/*" data-slot="${slot}" hidden></label>
       ${illusts[slot] ? `<button type="button" class="btn danger" data-remove="${slot}">外す</button>` : ''}</div></div>`).join('')}</div>
-    <div id="illustErr"></div></section>
+    <div id="illustErr"></div>
+    <h2 style="margin-top:20px">背景のイラストの濃さ</h2>
+    ${[['opCard', '残額カードの背景', display.cardOpacity, illusts.card_normal], ['opForm', '申請フォームの背景', display.formOpacity, illusts.form_bg]].map(([id, label, v, img]) => `
+      <div class="field"><label for="${id}">${label}：<span id="${id}Val">${v}%</span></label>
+        <div style="display:flex;gap:12px;align-items:center"><input id="${id}" type="range" min="0" max="100" step="5" value="${v}" style="flex:1">
+        <div class="thumb" style="width:72px;height:56px;margin:0;background:#fff;border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">${img ? `<img id="${id}Prev" src="${img}" alt="" style="max-width:100%;max-height:100%;opacity:${v / 100}">` : `<span id="${id}Prev" class="small muted">なし</span>`}</div></div></div>`).join('')}
+    </section>
     <section class="card"><h2>承認のしかた</h2>
     <label class="check" style="font-size:1rem"><input type="checkbox" id="autoApprove" ${d.autoApprove ? 'checked' : ''}><span>申請を自動で承認する</span></label>
     <p class="small muted">オンのときは、残額の範囲内の申請がそのまま承認済みになります。あとから管理者が金額の訂正・キャンセルをできます。申請者も、自動で承認された自分の申請は取り消せます。</p>
@@ -603,9 +620,37 @@ async function pageSettings() {
       ${Array.from({ length: 12 }, (_, i) => i + 1).map((m) => `<option value="${m}" ${m === s.fiscalStartMonth ? 'selected' : ''}>${m}月</option>`).join('')}
     </select><button class="btn primary" id="saveFsm" disabled>保存</button></div><div id="setErr"></div>
     <p class="small muted">変更すると、年間の使用額は新しい年度の区切りで数え直されます（申請の記録は変わりません）。</p></section>
-    <section class="card"><h2>予算</h2><dl class="dl">
-      <dt>月間予算</dt><dd>${yen(MONTHLY_BUDGET)}（毎月1日 0時にリセット・繰り越しなし）</dd>
-      <dt>年間予算</dt><dd>${yen(ANNUAL_BUDGET)}（年度の初めにリセット）</dd></dl></section>`;
+    <section class="card"><h2>予算</h2>
+      <div class="field"><label for="bm">月間予算（毎月1日 0時にリセット・繰り越しなし）</label>
+        <div class="amount-input"><input id="bm" type="text" inputmode="numeric" value="${s.monthly.budget}"><span>円</span></div></div>
+      <div class="field"><label for="ba">年間予算（年度の初めにリセット）</label>
+        <div class="amount-input"><input id="ba" type="text" inputmode="numeric" value="${s.annual.budget}"><span>円</span></div></div>
+      <button class="btn primary block" id="saveBudget">予算を保存</button><div id="budgetErr"></div>
+      <p class="small muted">保存するとすぐに残額へ反映されます（今月・今年度の分も新しい予算で計算し直します）。年間の予算は、管理者の「予算を超える場合も確定する」でも超えられません。</p></section>`;
+}
+
+function bindBudgetAndDisplay() {
+  const el = (x) => document.getElementById(x);
+  el('saveBudget').onclick = async () => {
+    const m = parseAmount(el('bm').value), y = parseAmount(el('ba').value);
+    if (!m || !y) { el('budgetErr').innerHTML = '<div class="flash error">金額を数字で入力してください</div>'; return; }
+    if (!confirm(`月間 ${yen(m)}・年間 ${yen(y)} にしますか？`)) return;
+    try { await api('setBudgets', m, y); flash = '予算を保存しました'; route(); }
+    catch (err) { el('budgetErr').innerHTML = `<div class="flash error">${esc(err.message)}</div>`; }
+  };
+  // 濃さ：動かしている間は見本に反映し、指を離したら保存する
+  [['cardOpacity', 'opCard'], ['formOpacity', 'opForm']].forEach(([key, id]) => {
+    const input = el(id);
+    if (!input) return;
+    input.oninput = () => {
+      el(id + 'Val').textContent = input.value + '%';
+      el(id + 'Prev').style.opacity = input.value / 100;
+    };
+    input.onchange = async () => {
+      try { display = await api('setDisplay', { [key]: Number(input.value) }); el(id + 'Val').textContent = input.value + '%（保存しました）'; }
+      catch (err) { el(id + 'Val').textContent = err.message; }
+    };
+  });
 }
 
 function bindIllustSettings() {

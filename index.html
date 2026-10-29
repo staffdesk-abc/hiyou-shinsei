@@ -149,9 +149,14 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .total b { color: var(--text); }
 .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .center { text-align: center; padding: 60px 16px; color: var(--muted); }
+/* 最新を取ってきている間の細い線 */
+#sync { position: fixed; top: 0; left: 0; height: 3px; width: 0; background: var(--accent); z-index: 50; opacity: 0; transition: opacity .3s; }
+#sync.on { opacity: 1; animation: sync 1.4s ease-in-out infinite; }
+@keyframes sync { 0% { left: 0; width: 0; } 50% { left: 20%; width: 60%; } 100% { left: 100%; width: 0; } }
 </style>
 </head>
 <body>
+<div id="sync" aria-hidden="true"></div>
 <header class="topbar" id="topbar" hidden>
   <div class="topbar-inner">
     <a href="#/" class="brand" id="brand">費用申請</a>
@@ -201,8 +206,49 @@ async function api(action, ...args) {
   });
   const json = await res.json();
   if (!json.ok) throw new Error(json.error);
+  // 書き込みのあとは、返事に付いてくる最新のホームの中身を覚え、ほかの画面の覚えは捨てる（古い内容を出さないため）
+  if (json.dashboard) {
+    cacheClear();
+    cacheSet(cacheKey('getDashboard', []), json.dashboard);
+  }
   return json.data;
 }
+
+// ---------- 速く見せるための覚え ----------
+// 画面を開いたら、まず前回の内容をすぐに出し、裏で最新を取ってきて差し替える（Apps Script は1回に1〜2秒かかるため）
+const CACHE_STORE = 'expense-cache';
+const NO_CACHE = new Error('no cache');
+let loadMode = 'fresh'; // 'cache'＝覚えだけで描く ／ 'fresh'＝窓口に問い合わせる
+const cacheKey = (action, args) => APP_KEY.slice(0, 8) + ':' + action + ':' + JSON.stringify(args);
+function cacheAll() {
+  try { return JSON.parse(localStorage.getItem(CACHE_STORE) || '{}'); } catch (e) { return {}; }
+}
+function cacheSet(k, v) {
+  const all = cacheAll();
+  all[k] = v;
+  try { localStorage.setItem(CACHE_STORE, JSON.stringify(all)); } catch (e) { /* 入りきらなければ覚えない */ }
+}
+function cacheClear() {
+  try { localStorage.removeItem(CACHE_STORE); } catch (e) { /* なし */ }
+}
+/** 画面の中身を読む。'cache' のときは覚えから（なければ NO_CACHE）、'fresh' のときは窓口から */
+async function load(action, ...args) {
+  const k = cacheKey(action, args);
+  if (loadMode === 'cache') {
+    const c = cacheAll()[k];
+    if (c === undefined) throw NO_CACHE;
+    return c;
+  }
+  const d = await api(action, ...args);
+  cacheSet(k, d);
+  return d;
+}
+
+// 画面を描いたあとに動かす処理（ボタンの準備など）。実際に表示した画面の分だけ動かす
+let binds = [];
+const afterRender = (fn) => binds.push(fn);
+// 添付画像（開いている間だけ覚える）
+const attachmentCache = {};
 
 // ---------- 表示の小物 ----------
 const $app = document.getElementById('app');
@@ -260,20 +306,45 @@ const ILLUST_SLOTS = [
   ['year_normal', '年間の残額カードの背景', 'ふだん'], ['year_over', '年間の残額カードの背景', '使い切り・超過'],
 ];
 let illusts = {};
+let illustVersion = null; // いま手元にある画像の版
 // 前回覚えた画像を先に使う（ホーム以外の画面を直接開いたときも、いちばん上の文字の画像を出すため）
-try { illusts = (JSON.parse(localStorage.getItem('expense-illust') || 'null') || {}).images || {}; } catch (e) { /* なし */ }
+try {
+  const c = JSON.parse(localStorage.getItem('expense-illust') || 'null');
+  if (c) { illusts = c.images || {}; illustVersion = c.version; }
+} catch (e) { /* なし */ }
+
 async function loadIllusts(version) {
-  if (!version) { illusts = {}; return; }
-  try {
-    const c = JSON.parse(localStorage.getItem('expense-illust') || 'null');
-    if (c && c.version === version) { illusts = c.images; return; }
-  } catch (e) { /* 覚えていなければ読み直す */ }
+  if (version === illustVersion) return; // 手元のものが最新
+  if (loadMode === 'cache') return; // 前回の内容で描くときは、手元の画像のまま
+  if (!version) { illusts = {}; illustVersion = version; return; }
   try {
     const r = await api('getIllustrations');
-    illusts = r.images;
-    try { localStorage.setItem('expense-illust', JSON.stringify(r)); } catch (e) { /* 入りきらなければ毎回読む */ }
+    // 大きい画像は端末で縮めてから覚える（ブラウザが覚えられる量に収め、次からは読み込まずに済むように）
+    const images = {};
+    for (const [slot, src] of Object.entries(r.images)) images[slot] = await shrinkIllust(src);
+    illusts = images;
+    illustVersion = r.version;
+    try { localStorage.setItem('expense-illust', JSON.stringify({ version: r.version, images })); } catch (e) { /* 入りきらなくても、開いている間は覚えている */ }
   } catch (e) {
-    illusts = {}; // イラストが読めなくてもアプリは使える
+    // イラストが読めなくてもアプリは使える（手元の画像のまま）
+  }
+}
+
+/** 表示に十分な大きさ（横800ピクセルまで）に縮める。小さい画像と GIF はそのまま */
+async function shrinkIllust(src) {
+  if (src.length <= 200000 || src.startsWith('data:image/gif')) return src;
+  try {
+    const img = await new Promise((ok, ng) => { const i = new Image(); i.onload = () => ok(i); i.onerror = ng; i.src = src; });
+    const scale = Math.min(1, 800 / Math.max(img.naturalWidth, img.naturalHeight));
+    const c = document.createElement('canvas');
+    c.width = Math.round(img.naturalWidth * scale);
+    c.height = Math.round(img.naturalHeight * scale);
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    let out = c.toDataURL('image/webp', 0.85);
+    if (!out.startsWith('data:image/webp')) out = c.toDataURL('image/png');
+    return out.length < src.length ? out : src;
+  } catch (e) {
+    return src;
   }
 }
 
@@ -318,7 +389,8 @@ function renderNav(path) {
   const active = (h) => (h === '#/' ? path === '/' : path.startsWith(h.slice(1)) || (h === '#/requests' && path.startsWith('/r/')));
   document.getElementById('topnav').innerHTML = items.map(([h, l]) => `<a href="${h}" class="${active(h) ? 'active' : ''}">${l}</a>`).join('');
   document.getElementById('tabbar').innerHTML = items.map(([h, l, p]) => `<a href="${h}" class="${active(h) ? 'active' : ''} ${p ? 'primary' : ''}">${l}</a>`).join('');
-  document.getElementById('who').textContent = `${me.name}（${me.role === 'admin' ? '管理者' : '申請者'}）`;
+  // 2人共通の URL（管理者の合言葉）は2人とも使うので、名前は出さない
+  document.getElementById('who').textContent = me.role === 'admin' ? '' : me.name;
   // 「費用申請」の文字は、画像が設定されていれば画像に差し替える
   document.getElementById('brand').innerHTML = illusts.title_logo ? `<img class="title-img" src="${illusts.title_logo}" alt="費用申請">` : '費用申請';
   document.getElementById('topbar').hidden = false;
@@ -329,7 +401,7 @@ function renderNav(path) {
 let flash = '';
 
 async function pageHome() {
-  const d = await api('getDashboard');
+  const d = await load('getDashboard');
   await loadIllusts(d.illustVersion);
   if (d.display) display = d.display;
   me = d.me;
@@ -346,7 +418,7 @@ async function pageHome() {
 }
 
 async function pageNew() {
-  const d = await api('getDashboard');
+  const d = await load('getDashboard');
   await loadIllusts(d.illustVersion);
   if (d.display) display = d.display;
   me = d.me;
@@ -358,7 +430,7 @@ function requestForm(d, fixedBar) {
   const s = d.summary;
   const available = Math.max(0, Math.min(s.monthly.remaining, s.annual.remaining));
   const id = newId(); // この画面で1回だけ作る。二重に送っても同じIDなので1件になる
-  setTimeout(() => bindNewForm(id, available, s), 0);
+  afterRender(() => bindNewForm(id, available, s));
   // アイコンと背景は、予算を使い切っても変えない
   const icon = illusts.form_normal;
   const bg = illusts.form_bg;
@@ -459,7 +531,7 @@ async function shrinkImage(file) {
 }
 
 async function pageRequests(params) {
-  const d = await api('listRequests');
+  const d = await load('listRequests');
   me = d.me;
   const start = d.fiscalStartMonth;
   const months = [...new Set([d.currentMonth, ...d.requests.map((r) => r.month)])].sort().reverse();
@@ -469,7 +541,7 @@ async function pageRequests(params) {
     status: params.get('status') || '',
     q: params.get('q') || '',
   };
-  setTimeout(() => {
+  afterRender(() => {
     const f = document.getElementById('filters');
     if (!f) return;
     const apply = () => {
@@ -481,7 +553,7 @@ async function pageRequests(params) {
     f.q.addEventListener('input', apply);
     f.addEventListener('submit', (e) => { e.preventDefault(); apply(); });
     renderList(d, start, state);
-  }, 0);
+  });
   const opt = (v, l, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(l)}</option>`;
   return `<h1>申請履歴</h1><form class="card filters" id="filters">
     <select name="period" aria-label="期間">${opt('all', 'すべての期間', state.period)}
@@ -504,17 +576,22 @@ function renderList(d, start, st) {
 }
 
 async function pageRequest(id) {
-  const d = await api('getRequest', id);
+  const d = await load('getRequest', id);
   me = d.me;
   const r = d.request;
   const isAdmin = me.role === 'admin';
   if (r.hasImage) {
-    api('getImage', id).then((src) => {
-      const box = document.getElementById('imgBox');
-      if (box) box.innerHTML = `<img src="${src}" alt="添付画像" class="photo">`;
-    }).catch(() => {});
+    // 添付画像は表示した画面でだけ読み、一度読んだものは覚えておく
+    afterRender(() => {
+      const put = (src) => {
+        const box = document.getElementById('imgBox');
+        if (box) box.innerHTML = `<img src="${src}" alt="添付画像" class="photo">`;
+      };
+      if (attachmentCache[id]) return put(attachmentCache[id]);
+      api('getImage', id).then((src) => { attachmentCache[id] = src; put(src); }).catch(() => {});
+    });
   }
-  setTimeout(() => bindActions(r), 0);
+  afterRender(() => bindActions(r));
   const histHtml = d.history.map((h) => {
     let t = h.action;
     if (h.fromAmount != null && h.fromAmount !== h.toAmount) t += ` ${yen(h.fromAmount)} → ${yen(h.toAmount)}`;
@@ -588,13 +665,13 @@ function bindActions(r) {
 }
 
 async function pageSettings() {
-  const d = await api('getDashboard');
+  const d = await load('getDashboard');
   await loadIllusts(d.illustVersion);
   if (d.display) display = d.display;
   me = d.me;
   if (me.role !== 'admin') { location.hash = '#/'; return ''; }
   const s = d.summary;
-  setTimeout(() => {
+  afterRender(() => {
     const sel = document.getElementById('fsm');
     const btn = document.getElementById('saveFsm');
     if (!sel) return;
@@ -615,7 +692,7 @@ async function pageSettings() {
       try { await api('setAutoApprove', on); flash = '保存しました'; route(); }
       catch (err) { document.getElementById('autoErr').innerHTML = `<div class="flash error">${esc(err.message)}</div>`; auto.checked = !on; auto.disabled = false; }
     };
-  }, 0);
+  });
   return `<h1>設定</h1>${flashHtml()}<section class="card"><h2>イラスト</h2>
     <p class="small muted">今月・年間の残額カードは、それぞれ別の画像を指定できます。「使い切り・超過」は、そのカードの予算を使い切ったときに切り替わります。アイコンと申請フォームの背景は、予算を使い切っても変わりません。</p>
     <div class="illust-grid">${ILLUST_SLOTS.map(([slot, place, mood]) => `<div class="illust-slot">
@@ -709,7 +786,7 @@ function bindIllustSettings() {
   });
 }
 
-/** イラストの画像。小さければそのまま（GIF の動きや透明もそのまま）、大きければ透明を残して縮める */
+/** イラストの画像。小さければ（約150KB まで）そのまま（GIF の動きや透明もそのまま）、大きければ透明を残して縮める。軽く保つため */
 async function prepareIllust(file) {
   const asIs = await new Promise((ok, ng) => {
     const r = new FileReader();
@@ -717,7 +794,7 @@ async function prepareIllust(file) {
     r.onerror = ng;
     r.readAsDataURL(file);
   });
-  if (/^data:image\/(png|jpeg|webp|gif);base64,/.test(asIs) && asIs.length <= 700000) return asIs;
+  if (/^data:image\/(png|jpeg|webp|gif);base64,/.test(asIs) && asIs.length <= 200000) return asIs;
   const bitmap = await createImageBitmap(file);
   try {
     for (const max of [800, 600, 400]) {
@@ -726,9 +803,9 @@ async function prepareIllust(file) {
       c.width = Math.round(bitmap.width * scale);
       c.height = Math.round(bitmap.height * scale);
       c.getContext('2d').drawImage(bitmap, 0, 0, c.width, c.height);
-      let url = c.toDataURL('image/webp', 0.9);
+      let url = c.toDataURL('image/webp', 0.85);
       if (!url.startsWith('data:image/webp')) url = c.toDataURL('image/png');
-      if (url.length <= 700000) return url;
+      if (url.length <= 200000) return url;
     }
   } finally {
     if (bitmap.close) bitmap.close();
@@ -736,11 +813,9 @@ async function prepareIllust(file) {
   throw new Error('too large');
 }
 
+/** 完了のお知らせ。前回の内容と最新の内容の両方の描画で同じものを出し、画面の切り替えが終わったら消す */
 function flashHtml() {
-  if (!flash) return '';
-  const h = `<div class="flash ok">${esc(flash)}</div>`;
-  flash = '';
-  return h;
+  return flash ? `<div class="flash ok">${esc(flash)}</div>` : '';
 }
 
 // ---------- 画面の切り替え ----------
@@ -755,22 +830,65 @@ async function route() {
     $app.innerHTML = '<p class="center">この端末ではまだ使えません。<br>教わった URL（#key= の付いたもの）を一度開いてください。</p>';
     return;
   }
-  try {
-    let html;
-    if (path === '/new') html = await pageNew();
-    else if (path === '/requests') html = await pageRequests(new URLSearchParams(qs || ''));
-    else if (path.startsWith('/r/')) html = await pageRequest(decodeURIComponent(path.slice(3)));
-    else if (path === '/settings') html = await pageSettings();
-    else html = await pageHome();
-    if (seq !== routeSeq) return; // 途中で別の画面に移った
-    $app.innerHTML = html;
+  const render = async (mode) => {
+    loadMode = mode;
+    binds = [];
+    try {
+      let html;
+      if (path === '/new') html = await pageNew();
+      else if (path === '/requests') html = await pageRequests(new URLSearchParams(qs || ''));
+      else if (path.startsWith('/r/')) html = await pageRequest(decodeURIComponent(path.slice(3)));
+      else if (path === '/settings') html = await pageSettings();
+      else html = await pageHome();
+      return { html, binds: binds };
+    } finally {
+      loadMode = 'fresh';
+    }
+  };
+  const show = (r, scroll) => {
+    $app.innerHTML = r.html;
     renderNav(path);
-    window.scrollTo(0, 0);
+    r.binds.forEach((fn) => fn());
+    if (scroll) window.scrollTo(0, 0);
+  };
+  // 1. 前回の内容があれば、すぐに出す
+  let shown = null;
+  try {
+    const r = await render('cache');
+    if (seq !== routeSeq) return; // 途中で別の画面に移った
+    show(r, true);
+    shown = r.html;
+  } catch (err) {
+    if (err !== NO_CACHE) console.error(err);
+    if (seq !== routeSeq) return;
+    $app.innerHTML = '<p class="center">読み込んでいます…</p>';
+  }
+  // 2. 裏で最新を取ってきて、変わっていれば差し替える（入力の途中なら差し替えない）
+  syncing(true);
+  try {
+    const r = await render('fresh');
+    if (seq !== routeSeq) return;
+    if (r.html !== shown && !(shown && formTouched())) show(r, !shown);
   } catch (err) {
     if (seq !== routeSeq) return;
-    $app.innerHTML = `<div class="flash error" role="alert">${esc(err.message || '読み込めませんでした')}</div>
-      <p><button class="btn" onclick="route()">もう一度読み込む</button></p>`;
+    if (!shown) {
+      $app.innerHTML = `<div class="flash error" role="alert">${esc(err.message || '読み込めませんでした')}</div>
+        <p><button class="btn" onclick="route()">もう一度読み込む</button></p>`;
+    }
+  } finally {
+    if (seq === routeSeq) { syncing(false); flash = ''; }
   }
+}
+
+/** 入力欄に何か入れ始めているか（そのときは画面を差し替えない） */
+function formTouched() {
+  return [...$app.querySelectorAll('input[type=text], input[type=url], textarea, select#category')]
+    .some((el) => el.value && el.defaultValue !== el.value);
+}
+
+/** 最新を取ってきている間、画面の上に細い線を出す */
+function syncing(on) {
+  document.getElementById('sync').classList.toggle('on', on);
 }
 window.addEventListener('hashchange', route);
 route();

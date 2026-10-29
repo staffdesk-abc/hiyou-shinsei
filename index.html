@@ -49,6 +49,14 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 /* 残額カードの背景のイラスト（右側に薄く）。文字はその上に出す */
 .budget, .form-card { position: relative; overflow: hidden; }
 .budget > :not(.bg-illust), .form-card > :not(.bg-illust):not(.submit-bar) { position: relative; }
+/* 残額カードの文字は白い縁取り（背景のイラストに重なっても読めるように）。注意の帯の白い文字には付けない */
+.budget .label, .budget .rows, .budget > .small {
+  text-shadow: 1px 1px 0 #fff, -1px 1px 0 #fff, 1px -1px 0 #fff, -1px -1px 0 #fff, 0 1px 0 #fff, 0 -1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff;
+}
+.budget .remaining {
+  text-shadow: 2px 2px 0 #fff, -2px 2px 0 #fff, 2px -2px 0 #fff, -2px -2px 0 #fff, 0 2px 0 #fff, 0 -2px 0 #fff, 2px 0 0 #fff, -2px 0 0 #fff,
+    3px 0 0 #fff, -3px 0 0 #fff, 0 3px 0 #fff, 0 -3px 0 #fff;
+}
 /* 白い背景の画像（JPEG など）でも、白が背景の色になじむように乗算で重ねる */
 .bg-illust { position: absolute; pointer-events: none; mix-blend-mode: multiply; }
 .budget .bg-illust { right: -6px; top: 50%; transform: translateY(-50%); height: 88%; max-width: 48%; object-fit: contain; }
@@ -56,11 +64,11 @@ h2 { font-size: 1.05rem; margin: 0 0 12px; }
 .form-card .bg-illust { inset: 0; width: 100%; height: 100%; object-fit: cover; }
 /* 「申請する」の前のアイコン */
 .form-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.form-head h2 { margin: 0; }
+.form-head h2 { margin: 0; flex: 1; min-width: 0; }
 /* 「費用申請」「申請する」を画像にしたとき。白い背景は背景の色になじませる */
 .title-img { display: block; object-fit: contain; mix-blend-mode: multiply; }
 .brand .title-img { height: 30px; max-width: 160px; }
-.form-head .title-img { height: 36px; max-width: 200px; }
+.form-head .title-img { width: 60%; height: auto; max-height: 120px; }
 .form-head img { height: 48px; width: 48px; object-fit: contain; mix-blend-mode: multiply; }
 /* 設定：イラストの指定欄 */
 .illust-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -162,7 +170,7 @@ const API_URL = 'https://script.google.com/macros/s/AKfycbw1XOHvc7v6hKX7om3_9qJH
 const LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
 const ENDPOINT = LOCAL ? '/api' : API_URL;
 /** 背景のイラストの濃さ（%）。管理者の設定（getDashboard の display）で上書きされる */
-let display = { cardOpacity: 30, formOpacity: 30 };
+let display = { cardOpacity: 30, formOpacity: 30, formTitleWidth: 60 };
 const MAX_IMAGE_CHARS = 1900000;
 // 申請画面の「商品名・イベント名」の選択肢（「その他」は名称を入力）
 const TITLE_CHOICES = ['ちいかわグッズ', 'ちいかわイベント', '外食', 'その他'];
@@ -356,7 +364,7 @@ function requestForm(d, fixedBar) {
   const bg = illusts.form_bg;
   return `<form class="card form-card" id="f" novalidate>
     ${bg ? `<img class="bg-illust" src="${bg}" alt="" aria-hidden="true" style="opacity:${display.formOpacity / 100}">` : ''}
-    ${fixedBar ? '' : `<div class="form-head">${icon ? `<img src="${icon}" alt="" aria-hidden="true">` : ''}<h2>${illusts.form_title ? `<img class="title-img" src="${illusts.form_title}" alt="申請する">` : '申請する'}</h2></div>`}
+    ${fixedBar ? '' : `<div class="form-head">${icon ? `<img src="${icon}" alt="" aria-hidden="true">` : ''}<h2>${illusts.form_title ? `<img class="title-img" src="${illusts.form_title}" alt="申請する" style="width:${display.formTitleWidth}%">` : '申請する'}</h2></div>`}
     <div class="field"><label for="category">商品名・イベント名<span class="req">必須</span></label>
       <select id="category"><option value="">選んでください</option>${TITLE_CHOICES.map((c) => `<option>${esc(c)}</option>`).join('')}</select>
       <input id="title" type="text" maxlength="100" autocomplete="off" placeholder="名称を入力" style="margin-top:8px" hidden></div>
@@ -621,6 +629,11 @@ async function pageSettings() {
       <div class="field"><label for="${id}">${label}：<span id="${id}Val">${v}%</span></label>
         <div style="display:flex;gap:12px;align-items:center"><input id="${id}" type="range" min="0" max="100" step="5" value="${v}" style="flex:1">
         <div class="thumb" style="width:72px;height:56px;margin:0;background:#fff;border:1px solid var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">${img ? `<img id="${id}Prev" src="${img}" alt="" style="max-width:100%;max-height:100%;opacity:${v / 100}">` : `<span id="${id}Prev" class="small muted">なし</span>`}</div></div></div>`).join('')}
+    <h2 style="margin-top:20px">「申請する」の文字の大きさ</h2>
+    <div class="field"><label for="ftw">横幅：<span id="ftwVal">${display.formTitleWidth}%</span></label>
+      <input id="ftw" type="range" min="20" max="100" step="5" value="${display.formTitleWidth}" style="width:100%">
+      <div style="margin-top:8px;padding:8px;background:#fff;border:1px solid var(--line);border-radius:8px">${illusts.form_title ? `<img id="ftwPrev" src="${illusts.form_title}" alt="" style="display:block;width:${display.formTitleWidth}%;mix-blend-mode:multiply">` : '<span class="small muted">「申請する」の文字の画像がまだありません</span>'}</div>
+      <div class="hint">見出しの横幅に対する大きさです（100%で横いっぱい）。</div></div>
     </section>
     <section class="card"><h2>承認のしかた</h2>
     <label class="check" style="font-size:1rem"><input type="checkbox" id="autoApprove" ${d.autoApprove ? 'checked' : ''}><span>申請を自動で承認する</span></label>
@@ -663,6 +676,16 @@ function bindBudgetAndDisplay() {
       catch (err) { el(id + 'Val').textContent = err.message; }
     };
   });
+  // 「申請する」の文字の大きさ
+  const ftw = el('ftw');
+  ftw.oninput = () => {
+    el('ftwVal').textContent = ftw.value + '%';
+    if (el('ftwPrev')) el('ftwPrev').style.width = ftw.value + '%';
+  };
+  ftw.onchange = async () => {
+    try { display = await api('setDisplay', { formTitleWidth: Number(ftw.value) }); el('ftwVal').textContent = ftw.value + '%（保存しました）'; }
+    catch (err) { el('ftwVal').textContent = err.message; }
+  };
 }
 
 function bindIllustSettings() {
